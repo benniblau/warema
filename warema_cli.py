@@ -40,27 +40,60 @@ class WaremaCLI:
             raise ConnectionError(f"Failed to connect to WAREMA host {self.host}")
         await self.control.refresh()
 
-    def convert_raw_to_degrees(self, raw_value: int, min_val: int = -127, max_val: int = 127) -> float:
-        """Convert raw WAREMA value to degrees (0-180)"""
-        if raw_value < min_val:
-            raw_value = min_val
-        elif raw_value > max_val:
-            raw_value = max_val
+    def convert_raw_to_percentage(self, raw_value: int) -> float:
+        """Convert raw WAREMA value to percentage (0-100%)
 
-        # Map from [-127, 127] to [0, 180] degrees
-        normalized = (raw_value - min_val) / (max_val - min_val)
-        return normalized * 180.0
+        Based on calibration:
+        - 0% = -45 (raw) - fully closed
+        - 100% = 90 (raw) - fully open
+        - Range: 135 raw units total
+        """
+        # Clamp to actual device range
+        if raw_value < -45:
+            raw_value = -45
+        elif raw_value > 90:
+            raw_value = 90
 
-    def convert_degrees_to_raw(self, degrees: float, min_val: int = -127, max_val: int = 127) -> int:
-        """Convert degrees (0-180) to raw WAREMA value"""
+        # Convert: percentage = (raw_value + 45) × (100/135)
+        percentage = (raw_value + 45) * (100.0 / 135.0)
+        return percentage
+
+    def convert_percentage_to_raw(self, percentage: float) -> int:
+        """Convert percentage (0-100%) to raw WAREMA value"""
+        if percentage < 0:
+            percentage = 0
+        elif percentage > 100:
+            percentage = 100
+
+        # Convert: raw_value = (percentage × 1.35) - 45
+        raw_value = int((percentage * 1.35) - 45)
+        return raw_value
+
+    def convert_raw_to_degrees(self, raw_value: int) -> float:
+        """Convert raw WAREMA value to degrees (0-135°)
+
+        Based on the understanding that the slat device has 135 total units
+        representing the full range of motion from fully closed to fully open.
+        """
+        # Clamp to actual device range
+        if raw_value < -45:
+            raw_value = -45
+        elif raw_value > 90:
+            raw_value = 90
+
+        # Convert: degrees = raw_value + 45 (so -45 becomes 0°, 90 becomes 135°)
+        degrees = raw_value + 45
+        return float(degrees)
+
+    def convert_degrees_to_raw(self, degrees: float) -> int:
+        """Convert degrees (0-135°) to raw WAREMA value"""
         if degrees < 0:
             degrees = 0
-        elif degrees > 180:
-            degrees = 180
+        elif degrees > 135:
+            degrees = 135
 
-        # Map from [0, 180] to [-127, 127]
-        normalized = degrees / 180.0
-        raw_value = int(min_val + normalized * (max_val - min_val))
+        # Convert: raw_value = degrees - 45
+        raw_value = int(degrees - 45)
         return raw_value
 
     def find_slat_devices(self) -> List[Any]:
@@ -136,11 +169,11 @@ class WaremaCLI:
                 rotation_action = dest.action(WMS_WebControl_pro_API_actionDescription.SlatRotate)
                 if rotation_action._params.get("rotation") is not None:
                     raw_rotation = rotation_action._params["rotation"]
-                    min_val = rotation_action._attrs.get("minValue", -127)
-                    max_val = rotation_action._attrs.get("maxValue", 127)
-                    degrees = self.convert_raw_to_degrees(raw_rotation, min_val, max_val)
+                    percentage = self.convert_raw_to_percentage(raw_rotation)
+                    degrees = self.convert_raw_to_degrees(raw_rotation)
                     device_info["current_rotation"] = {
                         "raw": raw_rotation,
+                        "percentage": round(percentage, 1),
                         "degrees": round(degrees, 1)
                     }
             else:
@@ -168,6 +201,116 @@ class WaremaCLI:
             }
 
         return config_data
+
+    async def set_slat_percentage(self, device_name: str, percentage: float) -> Dict:
+        """Set slat device to specified percentage (0-100%)"""
+        await self.connect()
+
+        # Find device
+        if device_name:
+            device = self.find_device_by_name(device_name)
+            if not device:
+                raise ValueError(f"Device '{device_name}' not found")
+        else:
+            # Use first available slat device
+            slat_devices = self.find_slat_devices()
+            if not slat_devices:
+                raise ValueError("No slat-capable devices found")
+            device = slat_devices[0]
+
+        # Check if device supports slat rotation
+        if not device.hasAction(WMS_WebControl_pro_API_actionDescription.SlatRotate):
+            raise ValueError(f"Device '{device.name}' does not support slat rotation")
+
+        await device.refresh()
+        rotation_action = device.action(WMS_WebControl_pro_API_actionDescription.SlatRotate)
+
+        # Convert percentage to raw value
+        raw_value = self.convert_percentage_to_raw(percentage)
+
+        # Execute rotation
+        response = await rotation_action(
+            rotation=raw_value,
+            responseType=WMS_WebControl_pro_API_responseType.Detailed
+        )
+
+        # Wait for device to respond
+        await asyncio.sleep(1)
+        await device.refresh()
+
+        # Get updated values
+        current_raw = rotation_action._params.get("rotation", raw_value)
+        current_percentage = self.convert_raw_to_percentage(current_raw)
+        current_degrees = self.convert_raw_to_degrees(current_raw)
+
+        return {
+            "device_name": device.name,
+            "device_id": device.id,
+            "requested_percentage": percentage,
+            "requested_raw": raw_value,
+            "actual_percentage": round(current_percentage, 1),
+            "actual_degrees": round(current_degrees, 1),
+            "actual_raw": current_raw,
+            "range_percentage": "0.0 to 100.0",
+            "range_degrees": "0.0 to 135.0",
+            "range_raw": "-45 to 90",
+            "response": response
+        }
+
+    async def set_slat_degrees(self, device_name: str, degrees: float) -> Dict:
+        """Set slat device to specified degrees (0-135°)"""
+        await self.connect()
+
+        # Find device
+        if device_name:
+            device = self.find_device_by_name(device_name)
+            if not device:
+                raise ValueError(f"Device '{device_name}' not found")
+        else:
+            # Use first available slat device
+            slat_devices = self.find_slat_devices()
+            if not slat_devices:
+                raise ValueError("No slat-capable devices found")
+            device = slat_devices[0]
+
+        # Check if device supports slat rotation
+        if not device.hasAction(WMS_WebControl_pro_API_actionDescription.SlatRotate):
+            raise ValueError(f"Device '{device.name}' does not support slat rotation")
+
+        await device.refresh()
+        rotation_action = device.action(WMS_WebControl_pro_API_actionDescription.SlatRotate)
+
+        # Convert degrees to raw value
+        raw_value = self.convert_degrees_to_raw(degrees)
+
+        # Execute rotation
+        response = await rotation_action(
+            rotation=raw_value,
+            responseType=WMS_WebControl_pro_API_responseType.Detailed
+        )
+
+        # Wait for device to respond
+        await asyncio.sleep(1)
+        await device.refresh()
+
+        # Get updated values
+        current_raw = rotation_action._params.get("rotation", raw_value)
+        current_percentage = self.convert_raw_to_percentage(current_raw)
+        current_degrees = self.convert_raw_to_degrees(current_raw)
+
+        return {
+            "device_name": device.name,
+            "device_id": device.id,
+            "requested_degrees": degrees,
+            "requested_raw": raw_value,
+            "actual_percentage": round(current_percentage, 1),
+            "actual_degrees": round(current_degrees, 1),
+            "actual_raw": current_raw,
+            "range_percentage": "0.0 to 100.0",
+            "range_degrees": "0.0 to 135.0",
+            "range_raw": "-45 to 90",
+            "response": response
+        }
 
     async def rotate_slat_device(self, device_name: str, degrees: float) -> Dict:
         """Rotate a slat device to specified degrees"""
@@ -253,7 +396,8 @@ async def cmd_config(args):
                     status = "✓" if device["available"] else "✗"
                     slat_info = ""
                     if device["slat_capable"] and "current_rotation" in device:
-                        slat_info = f" (rotation: {device['current_rotation']['degrees']}°)"
+                        rotation = device['current_rotation']
+                        slat_info = f" ({rotation['percentage']}% = {rotation['degrees']}°)"
 
                     print(f"  {status} {device['name']} ({device['type']}) - Room: {device['room']}{slat_info}")
 
@@ -275,17 +419,17 @@ async def cmd_config(args):
             sys.exit(1)
 
 
-async def cmd_rotate(args):
-    """Rotate slat device command"""
+async def cmd_set_percentage(args):
+    """Set slat device percentage command"""
     async with WaremaCLI(args.host) as cli:
         try:
-            result = await cli.rotate_slat_device(args.device, args.degrees)
+            result = await cli.set_slat_percentage(args.device, args.percentage)
 
-            print(f"✓ Slat rotation completed!")
+            print(f"✓ Slat percentage set!")
             print(f"Device: {result['device_name']} (ID: {result['device_id']})")
-            print(f"Requested: {result['requested_degrees']}° (raw: {result['requested_raw']})")
-            print(f"Actual: {result['actual_degrees']}° (raw: {result['actual_raw']})")
-            print(f"Range: {result['range_degrees']} (raw: {result['range_raw']})")
+            print(f"Requested: {result['requested_percentage']}% (raw: {result['requested_raw']})")
+            print(f"Actual: {result['actual_percentage']}% = {result['actual_degrees']}° (raw: {result['actual_raw']})")
+            print(f"Range: {result['range_percentage']} = {result['range_degrees']} (raw: {result['range_raw']})")
 
             if args.verbose:
                 print(f"API Response: {result['response']}")
@@ -293,6 +437,42 @@ async def cmd_rotate(args):
         except Exception as e:
             print(f"Error: {e}")
             sys.exit(1)
+
+
+async def cmd_set_degrees(args):
+    """Set slat device degrees command"""
+    async with WaremaCLI(args.host) as cli:
+        try:
+            result = await cli.set_slat_degrees(args.device, args.degrees)
+
+            print(f"✓ Slat degrees set!")
+            print(f"Device: {result['device_name']} (ID: {result['device_id']})")
+            print(f"Requested: {result['requested_degrees']}° (raw: {result['requested_raw']})")
+            print(f"Actual: {result['actual_degrees']}° = {result['actual_percentage']}% (raw: {result['actual_raw']})")
+            print(f"Range: {result['range_degrees']} = {result['range_percentage']} (raw: {result['range_raw']})")
+
+            if args.verbose:
+                print(f"API Response: {result['response']}")
+
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+
+async def cmd_rotate(args):
+    """Legacy rotate command (for backward compatibility)"""
+    # Convert old 0-180 degrees to new 0-135 degrees range
+    # This maintains backward compatibility while using correct mapping
+    legacy_degrees = args.degrees
+    if legacy_degrees > 135:
+        legacy_degrees = 135
+
+    await cmd_set_degrees(type('args', (), {
+        'host': args.host,
+        'device': args.device,
+        'degrees': legacy_degrees,
+        'verbose': getattr(args, 'verbose', False)
+    })())
 
 
 async def cmd_list_slats(args):
@@ -315,18 +495,17 @@ async def cmd_list_slats(args):
                 current_rotation = "Unknown"
                 if rotation_action._params.get("rotation") is not None:
                     raw_rotation = rotation_action._params["rotation"]
-                    min_val = rotation_action._attrs.get("minValue", -127)
-                    max_val = rotation_action._attrs.get("maxValue", 127)
-                    degrees = cli.convert_raw_to_degrees(raw_rotation, min_val, max_val)
-                    current_rotation = f"{degrees:.1f}° (raw: {raw_rotation})"
+                    percentage = cli.convert_raw_to_percentage(raw_rotation)
+                    degrees = cli.convert_raw_to_degrees(raw_rotation)
+                    current_rotation = f"{percentage:.1f}% = {degrees:.1f}° (raw: {raw_rotation})"
 
                 status = "✓" if device.available else "✗"
                 room_info = f" - Room: {device.room.name}" if device.room else ""
 
                 print(f"  {status} {device.name} (ID: {device.id}){room_info}")
                 print(f"    Type: {device.animationType.name}")
-                print(f"    Current Rotation: {current_rotation}")
-                print(f"    Range: {rotation_action._attrs.get('minValue', -127)} to {rotation_action._attrs.get('maxValue', 127)} (raw)")
+                print(f"    Current Position: {current_rotation}")
+                print(f"    Range: 0-100% = 0-135° (raw: -45 to 90)")
 
         except Exception as e:
             print(f"Error: {e}")
@@ -342,9 +521,12 @@ def main():
 Examples:
   %(prog)s config                         # Show configuration in readable format
   %(prog)s config --format json          # Show configuration as JSON
-  %(prog)s rotate 90                      # Rotate first slat device to 90°
-  %(prog)s rotate 45 --device lamaxa     # Rotate specific device to 45°
+  %(prog)s set-percent 50                 # Set first slat device to 50 percent
+  %(prog)s set-percent 75 --device lamaxa # Set specific device to 75 percent
+  %(prog)s set-degrees 67                 # Set first slat device to 67 degrees
+  %(prog)s set-degrees 100 --device lamaxa # Set specific device to 100 degrees
   %(prog)s list-slats                     # List all slat-capable devices
+  %(prog)s rotate 90                      # Legacy command for backward compatibility
         """
     )
 
@@ -360,10 +542,22 @@ Examples:
     config_parser.add_argument('--format', choices=['pretty', 'json'], default='pretty',
                               help='Output format (default: pretty)')
 
-    # Rotate command
-    rotate_parser = subparsers.add_parser('rotate', help='Rotate slat device')
-    rotate_parser.add_argument('degrees', type=float, help='Rotation in degrees (0-180)')
-    rotate_parser.add_argument('--device', help='Device name (partial match, uses first slat device if not specified)')
+    # Set percentage command
+    percent_parser = subparsers.add_parser('set-percent', help='Set slat device percentage 0-100 percent')
+    percent_parser.add_argument('percentage', type=float, help='Percentage 0-100 percent')
+    percent_parser.add_argument('--device', help='Device name partial match, uses first slat device if not specified')
+    percent_parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose output')
+
+    # Set degrees command
+    degrees_parser = subparsers.add_parser('set-degrees', help='Set slat device degrees 0-135 degrees')
+    degrees_parser.add_argument('degrees', type=float, help='Degrees 0-135 degrees')
+    degrees_parser.add_argument('--device', help='Device name partial match, uses first slat device if not specified')
+    degrees_parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose output')
+
+    # Legacy rotate command (for backward compatibility)
+    rotate_parser = subparsers.add_parser('rotate', help='Legacy rotate command use set-degrees instead')
+    rotate_parser.add_argument('degrees', type=float, help='Rotation in degrees 0-135 degrees, values over 135 will be clamped')
+    rotate_parser.add_argument('--device', help='Device name partial match, uses first slat device if not specified')
     rotate_parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose output')
 
     # List slats command
@@ -378,6 +572,10 @@ Examples:
     try:
         if args.command == 'config':
             asyncio.run(cmd_config(args))
+        elif args.command == 'set-percent':
+            asyncio.run(cmd_set_percentage(args))
+        elif args.command == 'set-degrees':
+            asyncio.run(cmd_set_degrees(args))
         elif args.command == 'rotate':
             asyncio.run(cmd_rotate(args))
         elif args.command == 'list-slats':
