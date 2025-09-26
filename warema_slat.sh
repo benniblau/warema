@@ -12,17 +12,19 @@ DEVICE_ID="57789"  # Lamaxa wenden device ID
 ACTION_ID="6"      # SlatRotate action ID
 TIMEOUT="10"
 
+
 # Help function
 show_help() {
     cat << EOF
 WAREMA Slat Control Script
 
-Usage: $0 <percentage|get> [options]
+Usage: $0 <percentage|get|devices> [options]
 
 Arguments:
   percentage          Percentage value (0-100) to set slat position
                      0 = fully closed, 100 = fully open
   get                 Get current percentage (returns integer only)
+  devices             List all registered devices with full details
 
 Options:
   -h, --help         Show this help message
@@ -34,8 +36,8 @@ Options:
 Examples:
   $0 50              # Set slats to 50% open (silent)
   $0 get             # Get current percentage (returns integer only)
+  $0 devices         # List all devices
   $0 75 --verbose    # Set to 75% with verbose output
-  $0 0 --silent      # Close slats completely (explicit silent)
 
 Conversion:
   0% = fully closed (raw: -45)
@@ -67,13 +69,13 @@ log_verbose() {
 percentage_to_raw() {
     local percentage="$1"
 
-    # Validate input
-    if [[ ! "$percentage" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        log_error "Invalid percentage: $percentage"
+    # Validate input (allow integers and decimals, including negative numbers for clamping)
+    if [[ ! "$percentage" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+        log_error "Invalid percentage: $percentage (must be a number)"
         return 1
     fi
 
-    # Clamp to valid range
+    # Clamp to valid range (0-100%)
     if (( $(echo "$percentage < 0" | bc -l) )); then
         percentage=0
     elif (( $(echo "$percentage > 100" | bc -l) )); then
@@ -81,11 +83,19 @@ percentage_to_raw() {
     fi
 
     # Convert: raw_value = (percentage × 1.35) - 45
+    # This gives us the range: 0% -> -45, 100% -> 90 (total range of 135 units)
     local raw_value
-    raw_value=$(echo "scale=0; ($percentage * 1.35) - 45" | bc -l)
+    raw_value=$(echo "scale=2; ($percentage * 1.35) - 45" | bc -l)
 
     # Round to nearest integer
     raw_value=$(printf "%.0f" "$raw_value")
+
+    # Ensure we stay within WAREMA device limits (-127 to 127)
+    if (( raw_value < -127 )); then
+        raw_value=-127
+    elif (( raw_value > 127 )); then
+        raw_value=127
+    fi
 
     echo "$raw_value"
 }
@@ -94,9 +104,32 @@ percentage_to_raw() {
 raw_to_percentage() {
     local raw_value="$1"
 
+    # Validate input (should be integer)
+    if [[ ! "$raw_value" =~ ^-?[0-9]+$ ]]; then
+        log_error "Invalid raw value: $raw_value"
+        return 1
+    fi
+
+    # Clamp to valid raw range (-127 to 127)
+    if (( raw_value < -127 )); then
+        raw_value=-127
+    elif (( raw_value > 127 )); then
+        raw_value=127
+    fi
+
     # Convert: percentage = (raw_value + 45) × (100/135)
+    # This gives us: -45 -> 0%, 90 -> 100%
     local percentage
-    percentage=$(echo "scale=1; ($raw_value + 45) * (100.0 / 135.0)" | bc -l)
+    percentage=$(echo "scale=10; ($raw_value + 45) * (100.0 / 135.0)" | bc -l)
+    # Round to 1 decimal place for display
+    percentage=$(printf "%.1f" "$percentage")
+
+    # Clamp result to valid percentage range (0-100%)
+    if (( $(echo "$percentage < 0" | bc -l) )); then
+        percentage="0.0"
+    elif (( $(echo "$percentage > 100" | bc -l) )); then
+        percentage="100.0"
+    fi
 
     echo "$percentage"
 }
@@ -264,6 +297,58 @@ get_current_percentage() {
     echo "$rounded_percentage"
 }
 
+
+
+# Get all registered devices with simple information
+get_all_devices() {
+    log_verbose "Retrieving all registered devices"
+
+    # Test connection first
+    local ping_response
+    ping_response=$(curl -s --max-time "$TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "protocolVersion": "1.0",
+            "command": "ping",
+            "source": 2
+        }' \
+        "http://$WAREMA_HOST/commonCommand" 2>/dev/null || echo "")
+
+    if [[ -z "$ping_response" ]] || ! echo "$ping_response" | grep -q '"status":0'; then
+        if [[ "${SILENT:-1}" != "1" ]]; then
+            echo "ERROR: Failed to connect to WAREMA host $WAREMA_HOST" >&2
+        fi
+        exit 1
+    fi
+
+    # Get system configuration
+    local config_response
+    config_response=$(curl -s --max-time "$TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "protocolVersion": "1.0",
+            "command": "getConfiguration",
+            "source": 2
+        }' \
+        "http://$WAREMA_HOST/commonCommand" 2>/dev/null || echo "")
+
+    if [[ -z "$config_response" ]]; then
+        if [[ "${SILENT:-1}" != "1" ]]; then
+            echo "ERROR: Failed to get system configuration" >&2
+        fi
+        exit 1
+    fi
+
+    log_verbose "System configuration retrieved"
+
+    # Simple output - just show the raw JSON response
+    echo "WAREMA Device Configuration:"
+    echo "Host: $WAREMA_HOST"
+    echo ""
+    echo "$config_response"
+}
+
+
 # Main function
 main() {
     local action=""
@@ -301,6 +386,10 @@ main() {
                 action="get"
                 shift
                 ;;
+            devices)
+                action="devices"
+                shift
+                ;;
             -*)
                 log_error "Unknown option: $1"
                 echo "Use --help for usage information" >&2
@@ -332,6 +421,13 @@ main() {
     # Handle get command
     if [[ "$action" == "get" ]]; then
         get_current_percentage
+        exit 0
+    fi
+
+
+    # Handle devices command
+    if [[ "$action" == "devices" ]]; then
+        get_all_devices
         exit 0
     fi
 
