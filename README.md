@@ -1,17 +1,17 @@
 # WAREMA Slat Control Script
 
-A shell script for controlling WAREMA WebControl Pro devices via direct API calls.
+A lightweight shell script for controlling WAREMA WebControl Pro devices via direct API calls.
 
 ## Overview
 
-This script provides command-line control for WAREMA slat devices (such as venetian blinds and slat roofs) connected to a WAREMA WebControl Pro system. It supports setting slat positions by percentage, retrieving current positions, stopping movement, and listing all registered devices.
+This standalone shell script provides command-line control for WAREMA slat devices (such as venetian blinds and slat roofs) connected to a WAREMA WebControl Pro system. Built using only shell scripting and standard Unix tools, it offers fast and reliable device control without external dependencies.
 
 ## Features
 
 - **Position Control**: Set slat position from 0% (fully closed) to 100% (fully open)
 - **Current Status**: Get current slat position as integer percentage
 - **Stop Control**: Immediately stop any ongoing rotation/movement
-- **Device Discovery**: List all registered devices with configuration details
+- **Device Discovery**: List all registered devices with raw JSON configuration
 - **Silent Operation**: Default silent mode with optional verbose output
 - **Bounds Checking**: Automatic validation and clamping of input values
 - **Error Handling**: Comprehensive connection testing and error reporting
@@ -20,8 +20,11 @@ This script provides command-line control for WAREMA slat devices (such as venet
 
 - `curl` - For HTTP API communication
 - `bc` - For mathematical calculations
-- `python3` - For JSON parsing (device listing only)
+- `bash` - Shell environment (version 4.0+)
+- Standard Unix tools: `grep`, `sed`, `xargs`, `printf`
 - Network access to WAREMA WebControl Pro host
+
+**No Python or external libraries required** - Pure shell script implementation.
 
 ## Configuration
 
@@ -61,7 +64,7 @@ The script automatically loads configuration from the `.env` file if present, ot
 ./warema_slat.sh stop        # Stop rotation immediately
 
 # List all devices
-./warema_slat.sh devices     # Show device configuration
+./warema_slat.sh devices     # Show raw JSON device configuration
 ```
 
 ### Options
@@ -282,7 +285,7 @@ percentage = (raw_value + 45) × (100/135)
 3. Test API directly: `curl http://10.10.1.229/commonCommand`
 
 ### Device Not Responding
-1. Verify device ID in configuration
+1. Verify device ID in `.env` configuration
 2. Check device status with: `./warema_slat.sh devices`
 3. Ensure device is powered and connected
 
@@ -290,19 +293,48 @@ percentage = (raw_value + 45) × (100/135)
 1. Use verbose mode: `./warema_slat.sh 50 --verbose`
 2. Check current position: `./warema_slat.sh get`
 3. Verify conversion calculations
+4. Check .env file configuration is correct
 
-## Related Files
+## Project Files
 
-- `warema_client.py` - Python client using pywmspro wrapper
-- `warema_cli.py` - Enhanced CLI application with degree support
-- `config.py` - Configuration file with host settings
+- `warema_slat.sh` - Main shell script application
 - `.env` - Environment configuration file (not tracked in git)
 - `.env.example` - Example configuration template
+- `.gitignore` - Git ignore rules for sensitive files
+- `README.md` - This documentation
+
+## Installation
+
+1. Clone or download the script:
+```bash
+wget https://your-repo/warema_slat.sh
+chmod +x warema_slat.sh
+```
+
+2. Copy and configure environment file:
+```bash
+cp .env.example .env
+# Edit .env with your WAREMA host and device settings
+```
+
+3. Test connection:
+```bash
+./warema_slat.sh get --verbose
+```
+
+## Architecture
+
+This is a **pure shell script implementation** with the following design principles:
+
+- **Zero Dependencies**: Uses only standard Unix tools available on all systems
+- **Direct API**: Communicates directly with WAREMA WebControl Pro JSON API
+- **Lightweight**: Fast execution with minimal resource usage
+- **Portable**: Runs on any Unix-like system with bash
+- **Self-Contained**: All functionality in a single script file
 
 ## References
 
 - [WAREMA WebControl Pro API Documentation](https://media.warema.com/dokumente/anleitungen-handbuecher/966664/warema_2064534_alhb_de_v0.pdf)
-- [pywmspro Python Library](https://pypi.org/project/pywmspro/)
 
 ## License
 
