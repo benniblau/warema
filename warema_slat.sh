@@ -10,6 +10,7 @@ set -euo pipefail
 WAREMA_HOST="10.10.1.229"
 DEVICE_ID="57789"  # Lamaxa wenden device ID
 ACTION_ID="6"      # SlatRotate action ID
+STOP_ACTION_ID="16" # ManualCommand Stop action ID
 TIMEOUT="10"
 
 
@@ -18,12 +19,13 @@ show_help() {
     cat << EOF
 WAREMA Slat Control Script
 
-Usage: $0 <percentage|get|devices> [options]
+Usage: $0 <percentage|get|stop|devices> [options]
 
 Arguments:
   percentage          Percentage value (0-100) to set slat position
                      0 = fully closed, 100 = fully open
   get                 Get current percentage (returns integer only)
+  stop                Stop current rotation/movement
   devices             List all registered devices with full details
 
 Options:
@@ -36,6 +38,7 @@ Options:
 Examples:
   $0 50              # Set slats to 50% open (silent)
   $0 get             # Get current percentage (returns integer only)
+  $0 stop            # Stop current rotation/movement
   $0 devices         # List all devices
   $0 75 --verbose    # Set to 75% with verbose output
 
@@ -227,6 +230,42 @@ set_rotation() {
     fi
 }
 
+# Stop device rotation/movement
+stop_rotation() {
+    log_verbose "Stopping device rotation/movement"
+
+    local response
+    response=$(curl -s --max-time "$TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"protocolVersion\": \"1.0\",
+            \"command\": \"action\",
+            \"source\": 2,
+            \"responseType\": 1,
+            \"actions\": [{
+                \"destinationId\": $DEVICE_ID,
+                \"actionId\": $STOP_ACTION_ID,
+                \"parameters\": {}
+            }]
+        }" \
+        "http://$WAREMA_HOST/commonCommand" 2>/dev/null || echo "")
+
+    if [[ -z "$response" ]]; then
+        log_error "Failed to stop device rotation"
+        return 1
+    fi
+
+    log_verbose "Stop response: $response"
+
+    # Check for success
+    if echo "$response" | grep -q '"command":"action"'; then
+        return 0
+    else
+        log_error "Device stop failed: $response"
+        return 1
+    fi
+}
+
 # Extract current rotation from status response
 extract_current_rotation() {
     local status_response="$1"
@@ -386,6 +425,10 @@ main() {
                 action="get"
                 shift
                 ;;
+            stop)
+                action="stop"
+                shift
+                ;;
             devices)
                 action="devices"
                 shift
@@ -424,6 +467,20 @@ main() {
         exit 0
     fi
 
+    # Handle stop command
+    if [[ "$action" == "stop" ]]; then
+        # Test connection first
+        if ! test_connection; then
+            exit 1
+        fi
+
+        if stop_rotation; then
+            log_info "✓ Device rotation stopped successfully"
+        else
+            exit 1
+        fi
+        exit 0
+    fi
 
     # Handle devices command
     if [[ "$action" == "devices" ]]; then
