@@ -1,11 +1,7 @@
 # Environment configuration
 .env
 
-# Python virtual environment
-venv/
-__pycache__/
-*.pyc
-*.pyo
+.gitignore
 
 # Logs and temporary files
 *.log
