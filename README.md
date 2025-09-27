@@ -22,9 +22,7 @@ This standalone shell script provides command-line control for WAREMA slat devic
 - `bc` - For mathematical calculations
 - `bash` - Shell environment (version 4.0+)
 - Standard Unix tools: `grep`, `sed`, `xargs`, `printf`
-- Network access to WAREMA WebControl Pro host
-
-**No Python or external libraries required** - Pure shell script implementation.
+- Network access to WAREMA WebControl Pro host that is fully configured
 
 ## Configuration
 
@@ -276,6 +274,22 @@ percentage = (raw_value + 45) × (100/135)
 - Input: -127 to 127 (raw value)
 - Output: 0.0 to 100.0 (percentage)
 - Precision: 1 decimal place
+
+## Integration into Home Assistant
+
+1. Add [command_line](https://www.home-assistant.io/integrations/command_line/) integration
+2. Add new [cover entity](https://www.home-assistant.io/integrations/command_line/#cover)
+3. Add commands and respective shell scripts:
+
+```
+- cover:
+      name: "LamaxaSlat"
+      command_open: "ssh -i /config/id_rsa -o StrictHostKeyChecking=no benni@10.10.1.225 -t '/home/benni/warema/warema_slat.sh 100'"
+      command_close: "ssh -i /config/id_rsa -o StrictHostKeyChecking=no benni@10.10.1.225 -t '/home/benni/warema/warema_slat.sh 0'"
+      command_state: "ssh -i /config/id_rsa -o StrictHostKeyChecking=no benni@10.10.1.225 -t '/home/benni/warema/warema_slat.sh get'"
+      command_stop: "ssh -i /config/id_rsa -o StrictHostKeyChecking=no benni@10.10.1.225 -t '/home/benni/warema/warema_slat.sh stop'"
+```
+
 
 ## Troubleshooting
 
