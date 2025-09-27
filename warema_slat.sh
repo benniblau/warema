@@ -6,12 +6,12 @@
 
 set -euo pipefail
 
-# Configuration
-WAREMA_HOST="10.10.1.229"
-DEVICE_ID="57789"  # Lamaxa wenden device ID
-ACTION_ID="6"      # SlatRotate action ID
-STOP_ACTION_ID="16" # ManualCommand Stop action ID
-TIMEOUT="10"
+# Configuration with defaults (can be overridden by .env file)
+WAREMA_HOST="${WAREMA_HOST:-10.10.1.229}"
+DEVICE_ID="${DEVICE_ID:-57789}"        # Lamaxa wenden device ID
+ACTION_ID="${ACTION_ID:-6}"            # SlatRotate action ID
+STOP_ACTION_ID="${STOP_ACTION_ID:-16}" # ManualCommand Stop action ID
+TIMEOUT="${TIMEOUT:-10}"
 
 
 # Help function
@@ -65,6 +65,35 @@ log_error() {
 log_verbose() {
     if [[ "${VERBOSE:-0}" == "1" && "${SILENT:-1}" != "1" ]]; then
         echo "VERBOSE: $*" >&2
+    fi
+}
+
+# Load configuration from .env file
+load_env() {
+    local env_file="${1:-.env}"
+
+    if [[ -f "$env_file" ]]; then
+        log_verbose "Loading configuration from $env_file"
+
+        # Read .env file and export variables
+        while IFS='=' read -r key value; do
+            # Skip comments and empty lines
+            [[ $key =~ ^[[:space:]]*# ]] && continue
+            [[ -z "$key" ]] && continue
+
+            # Remove leading/trailing whitespace and quotes
+            key=$(echo "$key" | xargs)
+            value=$(echo "$value" | xargs | sed 's/^["'\'']//' | sed 's/["'\'']$//')
+
+            # Export the variable
+            if [[ -n "$key" && -n "$value" ]]; then
+                export "$key"="$value"
+                log_verbose "Loaded: $key=$value"
+            fi
+        done < "$env_file"
+
+    else
+        log_verbose "No .env file found, using default values"
     fi
 }
 
@@ -393,6 +422,9 @@ main() {
     local action=""
     local verbose=0
     local silent=1  # Silent by default
+
+    # Load environment configuration
+    load_env
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
