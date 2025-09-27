@@ -284,10 +284,10 @@ percentage = (raw_value + 45) × (100/135)
 ```
 - cover:
       name: "LamaxaSlat"
-      command_open: "ssh -i /config/id_rsa -o StrictHostKeyChecking=no benni@10.10.1.225 -t '/home/benni/warema/warema_slat.sh 100'"
-      command_close: "ssh -i /config/id_rsa -o StrictHostKeyChecking=no benni@10.10.1.225 -t '/home/benni/warema/warema_slat.sh 0'"
-      command_state: "ssh -i /config/id_rsa -o StrictHostKeyChecking=no benni@10.10.1.225 -t '/home/benni/warema/warema_slat.sh get'"
-      command_stop: "ssh -i /config/id_rsa -o StrictHostKeyChecking=no benni@10.10.1.225 -t '/home/benni/warema/warema_slat.sh stop'"
+      command_open: "warema_slat.sh 100"
+      command_close: "warema_slat.sh 0"
+      command_state: "warema_slat.sh get"
+      command_stop: "warema_slat.sh stop"
 ```
 
 
