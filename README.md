@@ -1,355 +1,281 @@
 # WAREMA Slat Control Script
 
-A lightweight shell script for controlling WAREMA WebControl Pro devices via direct API calls.
+A lightweight shell script for controlling a WAREMA Lamaxa slat roof via the WMS WebControl Pro JSON API.
 
 ## Overview
 
-This standalone shell script provides command-line control for WAREMA slat devices (such as venetian blinds and slat roofs) connected to a WAREMA WebControl Pro system. Built using only shell scripting and standard Unix tools, it offers fast and reliable device control without external dependencies.
+Communicates directly with the WMS WebControl Pro gateway over HTTP — no external libraries required. Supports reading live device status, weather-sensor safety holds, and jog (impulse) control in addition to absolute angle positioning.
 
 ## Features
 
-- **Position Control**: Set slat position from 0% (fully closed) to 100% (fully open)
-- **Current Status**: Get current slat position as integer percentage
-- **Stop Control**: Immediately stop any ongoing rotation/movement
-- **Device Discovery**: List all registered devices with raw JSON configuration
-- **Silent Operation**: Default silent mode with optional verbose output
-- **Bounds Checking**: Automatic validation and clamping of input values
-- **Error Handling**: Comprehensive connection testing and error reporting
+- **Angle control**: set 0–100% (0 = closed, 100 = open) or send raw values for calibration
+- **Live status readback**: reads actual rotation and driving cause from the device when radio status is fresh
+- **Weather safety hold**: blocks set commands when Rain/Wind/Ice/Safety triggered the last move
+- **Impulse / jog**: step one increment open or closed without setting an absolute target
+- **Driving cause visibility**: exposes what last triggered movement (Sun, Rain, Wind, Manual…)
+- **Configurable range**: tune `SLAT_MIN_RAW` / `SLAT_MAX_RAW` to match your physical endpoints
+- **Silent by default**: no stdout noise unless asked; `get` outputs a single integer
 
 ## Requirements
 
-- `curl` - For HTTP API communication
-- `bc` - For mathematical calculations
-- `bash` - Shell environment (version 4.0+)
-- Standard Unix tools: `grep`, `sed`, `xargs`, `printf`
-- Network access to WAREMA WebControl Pro host that is fully configured
+- `bash` 4.0+
+- `curl`
+- `bc`
+- `python3` (for JSON parsing in status readback)
+- Network access to the WMS WebControl Pro host
 
 ## Configuration
 
-### Environment File Setup
+Copy and edit `.env`:
 
-1. Copy the example environment file:
 ```bash
-cp .env.example .env
-```
+WAREMA_HOST=10.10.1.229   # WebControl Pro IP
+DEVICE_ID=57789            # Lamaxa wenden destination ID
+ACTION_ID=6                # SlatRotate action
+STOP_ACTION_ID=16          # Stop action
+IMPULSE_ACTION_ID=23       # Impulse (jog) action
+TIMEOUT=10                 # curl timeout in seconds
 
-2. Edit `.env` to match your setup:
-```bash
-# WAREMA WebControl Pro Configuration
-WAREMA_HOST=10.10.1.229     # Your WAREMA WebControl Pro IP address
-DEVICE_ID=57789             # Target device ID (Lamaxa wenden)
-ACTION_ID=6                 # SlatRotate action ID
-STOP_ACTION_ID=16           # ManualCommand Stop action ID
-TIMEOUT=10                  # API call timeout in seconds
+# Tune these to match your physical endpoints (use `raw` + `status` to calibrate)
+SLAT_MIN_RAW=-45           # raw value at 0%  (fully closed)
+SLAT_MAX_RAW=90            # raw value at 100% (fully open)
 ```
-
-The script automatically loads configuration from the `.env` file if present, otherwise uses built-in defaults.
 
 ## Usage
 
-### Basic Commands
-
 ```bash
-# Set slat position (silent mode)
-./warema_slat.sh 50          # Set to 50% open
-./warema_slat.sh 0           # Fully closed
-./warema_slat.sh 100         # Fully open
-
-# Get current position (returns integer only)
-./warema_slat.sh get         # Returns: 50
-
-# Stop current movement
-./warema_slat.sh stop        # Stop rotation immediately
-
-# List all devices
-./warema_slat.sh devices     # Show raw JSON device configuration
+./warema_slat.sh <command> [options]
 ```
+
+### Commands
+
+| Command | Description |
+| --- | --- |
+| `<percentage>` | Set slat angle 0–100 |
+| `raw <value>` | Send raw rotation value (-127 to 127), for calibration |
+| `get` | Current position as integer (live if available, cached otherwise) |
+| `status` | Full status: position, driving cause, health flags |
+| `stop` | Halt current movement |
+| `impulse up\|down` | Jog one step open or closed |
+| `devices` | Dump full device configuration JSON |
 
 ### Options
 
-```bash
--h, --help         Show help message
--v, --verbose      Enable verbose output (ignored in get mode)
--s, --silent       Silent mode - no output (default for set operations)
--d, --device ID    Use different device ID
--H, --host HOST    Use different WAREMA host
-```
+| Flag | Description |
+| --- | --- |
+| `-v, --verbose` | Verbose output to stderr |
+| `-s, --silent` | No output (default for set operations) |
+| `-d, --device ID` | Override device ID |
+| `-H, --host HOST` | Override host |
+| `--force` | Override a Rain/Wind/Ice safety hold |
 
 ### Examples
 
 ```bash
-# Verbose operation
-./warema_slat.sh 75 --verbose
+# Control
+./warema_slat.sh 0             # close (silent)
+./warema_slat.sh 75            # set to 75%
+./warema_slat.sh 75 --verbose  # same, with feedback
+./warema_slat.sh stop          # halt motor
 
-# Use different device
-./warema_slat.sh 50 --device 12345
+# Fine control
+./warema_slat.sh impulse up    # jog open one step
+./warema_slat.sh impulse down  # jog closed one step
 
-# Use different host
-./warema_slat.sh get --host 192.168.1.100
+# Calibration
+./warema_slat.sh raw -40       # send raw value directly
+./warema_slat.sh status        # read back actual position + cause
+
+# Read position
+./warema_slat.sh get           # → 75
+
+# Override safety hold (e.g. after rain stopped)
+./warema_slat.sh 75 --force
 ```
 
 ## Position Mapping
 
-The script converts percentage values to WAREMA raw values:
+The percentage is mapped linearly to the raw rotation range:
 
-| Percentage | Raw Value | Description |
-|------------|-----------|-------------|
-| 0%         | -45       | Fully closed |
-| 50%        | 22        | Half open |
-| 100%       | 90        | Fully open |
+```text
+raw = (percentage / 100) × (SLAT_MAX_RAW − SLAT_MIN_RAW) + SLAT_MIN_RAW
+```
 
-**Total Range**: 135 units (-45 to +90)
-**Device Limits**: -127 to +127 (hardware bounds)
+Default calibration (adjust `SLAT_MIN_RAW` / `SLAT_MAX_RAW` in `.env`):
+
+| %   | Raw | Physical     |
+| --- | --- | ------------ |
+| 0   | -45 | Fully closed |
+| 50  | 22  | Half open    |
+| 100 | 90  | Fully open   |
+
+**Calibrating**: use `./warema_slat.sh raw <value> --verbose` to try a value, then `./warema_slat.sh status` to read back where the motor actually stopped. Adjust `SLAT_MIN_RAW` / `SLAT_MAX_RAW` accordingly.
+
+## Status and Rain Sensor Integration
+
+`getStatus` (with `responseType: 1`) returns the current rotation and what last triggered movement:
+
+```bash
+$ ./warema_slat.sh status
+position: 75% (raw: 56)
+drivingCause: 0 (None)
+heartbeatError: false
+blocking: false
+```
+
+### Driving cause codes
+
+| ID   | Name            | Triggered by          |
+| ---- | --------------- | --------------------- |
+| 0    | None            | No cause / API command |
+| 1    | Sun             | WMS sun sensor        |
+| 2    | Dusk/Dawn       | Time-based automation |
+| **3** | **Wind**       | WMS wind sensor       |
+| **4** | **Rain**       | WMS rain sensor       |
+| **5** | **Ice**        | Freeze protection     |
+| 6    | Temperature     | Temperature sensor    |
+| 7    | SwitchingTime   | Scheduled timer       |
+| 8    | Scene           | Scene executed        |
+| 9    | ControlMode     | Mode change           |
+| 10   | Manual          | Physical remote       |
+| **11** | **Safety**    | Safety override       |
+| 12   | Contact         | Contact sensor        |
+| 13   | CentralCommand  | Central system        |
+
+### Safety hold
+
+When the WMS system closes the roof due to rain, wind, ice, or a safety event, the `drivingCause` is set accordingly. The script refuses to override these automatically:
+
+```bash
+$ ./warema_slat.sh 75
+ERROR: Blocked: device is under Rain safety hold (drivingCause=4). Use --force to override.
+```
+
+Use `--force` only once you've confirmed conditions are safe:
+
+```bash
+./warema_slat.sh 75 --force
+```
+
+**Note**: `getStatus` is intermittent — the WMS gateway only has fresh status when the SlatRoof device last sent a radio update. When unavailable, `get` falls back to the last value sent by this script, and the safety check is skipped (not blocked).
+
+### Rain automation example
+
+```bash
+#!/bin/bash
+# Called by your external rain sensor or home automation
+
+CAUSE=$(./warema_slat.sh status 2>/dev/null | awk '/drivingCause/ {print $2}')
+if [[ "$CAUSE" == "4" ]]; then
+    echo "Rain hold active — not overriding"
+    exit 0
+fi
+
+./warema_slat.sh "$1"   # e.g. 0 to close, 75 to open to sun position
+```
+
+## Home Assistant Integration
+
+Use the [command_line](https://www.home-assistant.io/integrations/command_line/) integration with a `cover` entity:
+
+```yaml
+cover:
+  - platform: command_line
+    name: Lamaxa Slat Roof
+    command_open: "/path/to/warema_slat.sh 100"
+    command_close: "/path/to/warema_slat.sh 0"
+    command_stop: "/path/to/warema_slat.sh stop"
+    command_state: "/path/to/warema_slat.sh get"
+    value_template: "{{ value }}"
+    position_template: "{{ value }}"
+    command_set_position: "/path/to/warema_slat.sh {{ position }}"
+    scan_interval: 30
+```
 
 ## API Reference
 
-### WAREMA WebControl Pro API
-
-The script communicates with the WAREMA WebControl Pro API using JSON over HTTP.
-
-#### Base URL
-```
-http://{WAREMA_HOST}/commonCommand
-```
-
-#### Authentication
-No authentication required for local network access.
-
-#### Common Headers
-```
-Content-Type: application/json
-```
+**Endpoint**: `POST http://{host}/commonCommand`  
+**Auth**: none (local network only)  
+**Protocol version**: `1.0`  
+**Source**: always `2`
 
 ### API Commands
 
-#### 1. Ping (Connection Test)
-```json
-{
-  "protocolVersion": "1.0",
-  "command": "ping",
-  "source": 2
-}
-```
+| Command | Key parameters | Notes |
+| --- | --- | --- |
+| `ping` | — | Returns `{"status": 0}` on success |
+| `getConfiguration` | — | Returns all devices, rooms, scenes |
+| `getStatus` | `responseType: 1`, `destinations: [id]` | **Must include `responseType: 1`** or returns error |
+| `action` | `responseType: 0`, `actions: [...]` | Use `responseType: 0` (Instant) for speed |
+| `sceneActions` | `sceneId`, `sceneActionType` | Execute or relearn a scene |
 
-**Response:**
-```json
-{
-  "status": 0,
-  "command": "ping",
-  "protocolVersion": "1.0.0"
-}
-```
+### getStatus — correct form
 
-#### 2. Get Configuration
-```json
-{
-  "protocolVersion": "1.0",
-  "command": "getConfiguration",
-  "source": 2
-}
-```
-
-**Response:** Contains complete system configuration including devices, rooms, and actions.
-
-#### 3. Get Status
 ```json
 {
   "protocolVersion": "1.0",
   "command": "getStatus",
   "source": 2,
+  "responseType": 1,
   "destinations": [57789]
 }
 ```
 
-**Response:** Contains current device status and position values.
+> **Important**: omitting `responseType: 1` causes error `327684` on SlatRoof devices.
 
-#### 4. Set Rotation
+**Response when fresh:**
 ```json
 {
-  "protocolVersion": "1.0",
-  "command": "action",
-  "source": 2,
-  "responseType": 1,
-  "actions": [{
+  "command": "getStatus",
+  "protocolVersion": "1.0.0",
+  "details": [{
     "destinationId": 57789,
-    "actionId": 6,
-    "parameters": {
-      "rotation": -45
+    "data": {
+      "drivingCause": 4,
+      "heartbeatError": false,
+      "blocking": false,
+      "productData": [
+        {"actionId": 6,  "value": {"rotation": -40}},
+        {"actionId": 23, "value": {"rotation": -40}}
+      ]
     }
   }]
 }
 ```
 
-#### 5. Stop Movement
-```json
-{
-  "protocolVersion": "1.0",
-  "command": "action",
-  "source": 2,
-  "responseType": 1,
-  "actions": [{
-    "destinationId": 57789,
-    "actionId": 16,
-    "parameters": {}
-  }]
-}
-```
+### Device actions (id=57789, Lamaxa wenden)
 
-### Device Types
+| Action ID | Type | Description | Parameters |
+| --- | --- | --- | --- |
+| 6 | Rotation (2) | SlatRotate | `{"rotation": -127…127}` |
+| 16 | Stop (6) | ManualCommand | `{}` |
+| 22 | Identify (8) | Identify | `{}` |
+| 23 | Impulse (7) | ManualCommand | `{"impulse": 0}` up / `{"impulse": 1}` down |
 
-| ID | Type | Description |
-|----|------|-------------|
-| 0  | VenetianBlind | Standard venetian blinds |
-| 1  | Awning | Retractable awnings |
-| 2  | RollerShutterBlind | Roller shutters |
-| 3  | SlatRoof | Slat roof systems |
-| 4  | Window | Window operators |
-| 5  | Switch | Simple on/off devices |
-| 6  | Dimmer | Dimmable devices |
-| 999| Unknown | Unrecognized device type |
+### Error codes
 
-### Action Types
-
-| ID | Type | Description |
-|----|------|-------------|
-| 0  | Percentage | Position by percentage |
-| 1  | PercentageDelta | Relative percentage change |
-| 2  | Rotation | Absolute rotation value |
-| 3  | RotationDelta | Relative rotation change |
-| 4  | Switch | On/off toggle |
-| 5  | Toggle | State toggle |
-| 6  | Stop | Stop movement |
-| 7  | Impulse | Momentary action |
-| 8  | Identify | Device identification |
-| 9  | Enumeration | Enumerated value |
-
-### Action Descriptions
-
-| ID | Description | Usage |
-|----|-------------|-------|
-| 0  | AwningDrive | Awning extension/retraction |
-| 1  | ValanceDrive | Valance movement |
-| 2  | SlatDrive | Slat position control |
-| 3  | SlatRotate | Slat rotation angle |
-| 4  | RollerShutterBlindDrive | Shutter up/down |
-| 5  | WindowDrive | Window open/close |
-| 6  | LightSwitch | Light on/off |
-| 7  | LoadSwitch | Load switching |
-| 8  | LightDimming | Light dimming |
-| 9  | LoadDimming | Load dimming |
-| 10 | LightToggle | Light toggle |
-| 11 | LastToggle | Repeat last action |
-| 12 | ManualCommand | Manual control |
-| 13 | Identify | Device identification |
-
-## Error Handling
-
-The script includes comprehensive error handling:
-
-- **Connection Testing**: Validates host connectivity before operations
-- **Input Validation**: Checks percentage values and device IDs
-- **Bounds Checking**: Clamps values to valid ranges
-- **Response Validation**: Verifies API responses for success
-- **Timeout Handling**: Configurable timeout for API calls
-
-### Exit Codes
-
-- `0` - Success
-- `1` - Error (connection failure, invalid input, API error)
-
-## Conversion Functions
-
-### Percentage to Raw Value
-```bash
-raw_value = (percentage × 1.35) - 45
-```
-- Input: 0-100 (percentage)
-- Output: -45 to 90 (raw value)
-- Bounds: Clamped to -127 to 127
-
-### Raw Value to Percentage
-```bash
-percentage = (raw_value + 45) × (100/135)
-```
-- Input: -127 to 127 (raw value)
-- Output: 0.0 to 100.0 (percentage)
-- Precision: 1 decimal place
-
-## Integration into Home Assistant
-
-1. Add [command_line](https://www.home-assistant.io/integrations/command_line/) integration
-2. Add new [cover entity](https://www.home-assistant.io/integrations/command_line/#cover)
-3. Add commands and respective shell scripts:
-
-```
-- cover:
-      name: "LamaxaSlat"
-      command_open: "warema_slat.sh 100"
-      command_close: "warema_slat.sh 0"
-      command_state: "warema_slat.sh get"
-      command_stop: "warema_slat.sh stop"
-```
-
+| Code | Hex | Meaning |
+| --- | --- | --- |
+| 327681 | 0x50001 | Unknown |
+| 327682 | 0x50002 | Invalid action parameters |
+| 327683 | 0x50003 | Missing required field |
+| 327684 | 0x50004 | Destination unavailable / status stale |
 
 ## Troubleshooting
 
-### Connection Issues
-1. Verify WAREMA host IP address
-2. Check network connectivity: `ping 10.10.1.229`
-3. Test API directly: `curl http://10.10.1.229/commonCommand`
+**`getStatus` always returns error 327684**  
+Include `"responseType": 1` in the request. If still failing, the WMS gateway doesn't have fresh radio status yet — try again after the device moves or wait for its next heartbeat.
 
-### Device Not Responding
-1. Verify device ID in `.env` configuration
-2. Check device status with: `./warema_slat.sh devices`
-3. Ensure device is powered and connected
+**Position reported by `status` doesn't match what was commanded**  
+The SlatRoof motor has mechanical tolerance (~5 raw units). Calibrate `SLAT_MIN_RAW` and `SLAT_MAX_RAW` using `raw` + `status` to find the actual physical endpoints.
 
-### Unexpected Behavior
-1. Use verbose mode: `./warema_slat.sh 50 --verbose`
-2. Check current position: `./warema_slat.sh get`
-3. Verify conversion calculations
-4. Check .env file configuration is correct
+**Set command blocked with "safety hold"**  
+The Warema rain/wind/ice sensor triggered a protective close. Wait for conditions to clear or use `--force`.
 
-## Project Files
-
-- `warema_slat.sh` - Main shell script application
-- `.env` - Environment configuration file (not tracked in git)
-- `.env.example` - Example configuration template
-- `.gitignore` - Git ignore rules for sensitive files
-- `README.md` - This documentation
-
-## Installation
-
-1. Clone or download the script:
-```bash
-wget https://your-repo/warema_slat.sh
-chmod +x warema_slat.sh
-```
-
-2. Copy and configure environment file:
-```bash
-cp .env.example .env
-# Edit .env with your WAREMA host and device settings
-```
-
-3. Test connection:
-```bash
-./warema_slat.sh get --verbose
-```
-
-## Architecture
-
-This is a **pure shell script implementation** with the following design principles:
-
-- **Zero Dependencies**: Uses only standard Unix tools available on all systems
-- **Direct API**: Communicates directly with WAREMA WebControl Pro JSON API
-- **Lightweight**: Fast execution with minimal resource usage
-- **Portable**: Runs on any Unix-like system with bash
-- **Self-Contained**: All functionality in a single script file
+**Device not found / ping fails**  
+Verify `WAREMA_HOST` in `.env` and check network connectivity with `ping 10.10.1.229`.
 
 ## References
 
-- [WAREMA WebControl Pro API Documentation](https://media.warema.com/dokumente/anleitungen-handbuecher/966664/warema_2064534_alhb_de_v0.pdf)
-
-## License
-
-This script is provided as-is for controlling WAREMA devices in home automation setups.
+- [Official WMS WebControl Pro API Documentation (PDF)](https://media.warema.com/dokumente/anleitungen-handbuecher/966664/warema_2064534_alhb_de_v0.pdf)
+- [pywmspro Python library](https://github.com/mback2k/pywmspro) — reference implementation

@@ -1,320 +1,378 @@
-# WAREMA WebControl Pro API Reference
+# WMS WebControl Pro API Reference
 
-Based on analysis of the pywmspro Python wrapper, this document provides a comprehensive reference for the WAREMA WebControl Pro API.
+Based on live reverse engineering against device `10.10.1.229`, the official API documentation PDF (`warema_2064534_alhb_de_v0.pdf`), and the [pywmspro](https://github.com/mback2k/pywmspro) Python library.
 
-## Core API Classes
+---
 
-### WebControlPro
-Main control class for interacting with WAREMA devices.
+## Transport
 
-#### Connection & Configuration
-```python
-from aiohttp import ClientSession
-from wmspro.webcontrol import WebControlPro
+- **Endpoint**: `POST http://{host}/commonCommand`
+- **Content-Type**: `application/json`
+- **Auth**: none — local network only
+- **Protocol version**: `"1.0"` (response echoes `"1.0.0"`)
+- **Source**: always `2`
 
-async with ClientSession() as session:
-    control = WebControlPro("10.10.1.229", session)
+Every request includes:
 
-    # Test connection
-    is_connected = await control.ping()
-
-    # Load configuration and devices
-    await control.refresh()
+```json
+{
+  "protocolVersion": "1.0",
+  "command": "<name>",
+  "source": 2,
+  "<additional fields>": "..."
+}
 ```
 
-#### Properties
-- `host` - WAREMA host address
-- `config` - System configuration dictionary
-- `dests` - Dictionary of destination devices (ID -> Destination)
-- `rooms` - Dictionary of rooms (ID -> Room)
-- `scenes` - Dictionary of scenes (ID -> Scene)
+---
 
-#### Methods
-- `ping()` - Test connection (returns bool)
-- `refresh()` - Load/refresh all configuration and device data
-- `dest(name)` - Find destination by name
-- `diag()` - Get comprehensive diagnostic information
+## Commands
 
-## Device Types (Animation Types)
+### ping
 
-### Supported Device Types
-```python
-class WMS_WebControl_pro_API_animationType(IntEnum):
-    VenetianBlind = 0      # Venetian blinds with slats
-    Awning = 1             # Retractable awnings
-    RollerShutterBlind = 2 # Roller shutters
-    SlatRoof = 3           # Slat roof systems (like pergolas)
-    Window = 4             # Motorized windows
-    Switch = 5             # On/off switches
-    Dimmer = 6             # Dimmable lights/loads
-    Unknown = 999
+Test gateway connectivity.
+
+**Request:**
+
+```json
+{
+  "protocolVersion": "1.0",
+  "command": "ping",
+  "source": 2
+}
 ```
 
-## Action Types
+**Response:**
 
-### Available Action Types
-```python
-class WMS_WebControl_pro_API_actionType(IntEnum):
-    Percentage = 0         # 0-100% position control
-    PercentageDelta = 1    # Relative percentage change
-    Rotation = 2           # Absolute rotation (slats)
-    RotationDelta = 3      # Relative rotation change
-    Switch = 4             # On/off control
-    Toggle = 5             # Toggle current state
-    Stop = 6               # Stop movement
-    Impulse = 7            # Single impulse command
-    Identify = 8           # Device identification (blinking)
-    Enumeration = 9        # Predefined value selection
-    Unknown = 999
+```json
+{
+  "command": "ping",
+  "protocolVersion": "1.0.0",
+  "status": 0
+}
 ```
 
-### Action Descriptions
-```python
-class WMS_WebControl_pro_API_actionDescription(IntEnum):
-    AwningDrive = 0           # Control awning position
-    ValanceDrive = 1          # Control valance position
-    SlatDrive = 2             # Control slat position
-    SlatRotate = 3            # Rotate slats
-    RollerShutterBlindDrive = 4  # Control roller shutter
-    WindowDrive = 5           # Control window position
-    LightSwitch = 6           # Light switching
-    LoadSwitch = 7            # Load switching
-    LightDimming = 8          # Light dimming
-    LoadDimming = 9           # Load dimming
-    LightToggle = 10          # Light toggle
-    LastToggle = 11           # Repeat last toggle
-    ManualCommand = 12        # Manual control commands
-    Identify = 13             # Device identification
-    Unknown = 999
+---
+
+### getConfiguration
+
+Returns all configured devices (destinations), rooms, and scenes. Use this to discover destination IDs and available action IDs.
+
+**Request:**
+
+```json
+{
+  "protocolVersion": "1.0",
+  "command": "getConfiguration",
+  "source": 2
+}
 ```
 
-## Destination (Device) Class
+**Response (Lamaxa wenden — this device):**
 
-### Properties
-- `id` - Unique device identifier
-- `name` - Device name
-- `actions` - Dictionary of available actions
-- `animationType` - Device type (see animation types)
-- `drivingCause` - What triggered last movement
-- `room` - Room object this device belongs to
-- `available` - Whether device is available (not in error)
-- `status` - Current device status
-
-### Methods
-- `refresh()` - Update device status
-- `hasAction(actionDescription, actionType=None)` - Check if action exists
-- `action(actionDescription, actionType=None)` - Get specific action
-- `diag()` - Get diagnostic information
-
-### Example Usage
-```python
-# Find device
-device = control.dest("Lamaxa wenden")
-
-# Check for rotation capability
-if device.hasAction(WMS_WebControl_pro_API_actionDescription.SlatRotate):
-    # Get rotation action
-    rotate_action = device.action(WMS_WebControl_pro_API_actionDescription.SlatRotate)
-
-    # Execute rotation to specific angle
-    await rotate_action(rotation=90)
+```json
+{
+  "command": "getConfiguration",
+  "protocolVersion": "1.0.0",
+  "destinations": [
+    {
+      "id": 57789,
+      "animationType": 3,
+      "names": ["Lamaxa wenden", "", "", ""],
+      "actions": [
+        {"id": 6,  "actionType": 2, "actionDescription": 3, "minValue": -127, "maxValue": 127},
+        {"id": 16, "actionType": 6, "actionDescription": 12},
+        {"id": 22, "actionType": 8, "actionDescription": 13},
+        {"id": 23, "actionType": 7, "actionDescription": 12}
+      ]
+    }
+  ],
+  "rooms": [
+    {"id": 26759, "name": "Terrasse", "destinations": [57789], "scenes": []}
+  ],
+  "scenes": []
+}
 ```
 
-## Action Class
+---
 
-### Properties
-- `id` - Action identifier
-- `actionType` - Type of action (see action types)
-- `actionDescription` - Description of action (see descriptions)
-- Dynamic attributes from `_attrs` (e.g., `minValue`, `maxValue`)
-- Dynamic parameters from `_params` (current values)
+### getStatus
 
-### Methods
-- `__call__(**kwargs)` - Execute the action with parameters
-- `diag()` - Get diagnostic information
+Returns live device state: current rotation, what last triggered movement (`drivingCause`), and health flags.
 
-### Common Action Parameters
+> **Critical**: must include `"responseType": 1`. Without it, SlatRoof devices return error `327684`.
+>
+> **Intermittent**: the WMS gateway only has fresh status when the device last sent a radio heartbeat. On error, retry after the device moves or wait for the next heartbeat cycle.
 
-#### Percentage Actions
-```python
-# Set to 50% position
-await action(percentage=50)
+**Request:**
 
-# Move by 25% (relative)
-await action(percentageDelta=25)
+```json
+{
+  "protocolVersion": "1.0",
+  "command": "getStatus",
+  "source": 2,
+  "responseType": 1,
+  "destinations": [57789]
+}
 ```
 
-#### Rotation Actions
-```python
-# Rotate to specific angle (-127 to 127 typically)
-await action(rotation=90)
+**Response (success):**
 
-# Rotate by relative amount
-await action(rotationDelta=15)
+```json
+{
+  "command": "getStatus",
+  "protocolVersion": "1.0.0",
+  "details": [
+    {
+      "destinationId": 57789,
+      "data": {
+        "drivingCause": 4,
+        "heartbeatError": false,
+        "blocking": false,
+        "productData": [
+          {"actionId": 6,  "value": {"rotation": -40}},
+          {"actionId": 23, "value": {"rotation": -40}}
+        ]
+      }
+    }
+  ]
+}
 ```
 
-#### Switch Actions
-```python
-# Turn on
-await action(switchValue=True)
+**Response (status unavailable):**
 
-# Turn off
-await action(switchValue=False)
+```json
+{"protocolVersion": "1.0.0", "command": "getStatus", "errors": [327684]}
 ```
 
-#### Control Actions
-```python
-# Stop movement
-await action()  # Stop actions typically need no parameters
+#### drivingCause values
 
-# Identify device (make it blink/move)
-await action()
+| ID | Name | Description |
+| --- | --- | --- |
+| 0 | None | No trigger / API command |
+| 1 | Sun | WMS sun sensor |
+| 2 | Dusk/Dawn | Time-based automation |
+| 3 | Wind | WMS wind sensor |
+| 4 | Rain | WMS rain sensor |
+| 5 | Ice | Freeze protection |
+| 6 | Temperature | Temperature sensor |
+| 7 | SwitchingTime | Scheduled timer |
+| 8 | Scene | Scene execution |
+| 9 | ControlMode | Control mode change |
+| 10 | Manual | Physical remote control |
+| 11 | Safety | Safety override |
+| 12 | Contact | Contact sensor |
+| 13 | CentralCommand | Central system command |
+| 999 | Unknown | Unrecognised |
+
+---
+
+### action
+
+Send a control command to one or more destinations. Multiple actions targeting the **same** destination can be batched in one request.
+
+**Request:**
+
+```json
+{
+  "protocolVersion": "1.0",
+  "command": "action",
+  "source": 2,
+  "responseType": 0,
+  "actions": [
+    {
+      "destinationId": 57789,
+      "actionId": 6,
+      "parameters": {"rotation": 22}
+    }
+  ]
+}
 ```
 
-## Response Types
+**Response:**
 
-```python
-class WMS_WebControl_pro_API_responseType(IntEnum):
-    Instant = 0    # Return immediately
-    Detailed = 1   # Wait for detailed response
+```json
+{"command": "action", "protocolVersion": "1.0.0"}
 ```
 
-## Scene Class
+#### responseType
 
-### Properties
-- `id` - Scene identifier
-- `name` - Scene name
-- `room` - Room this scene belongs to
+| Value | Name | Behaviour |
+| --- | --- | --- |
+| 0 | Instant | Returns as soon as the gateway receives the command (~70 ms). **Use this.** |
+| 1 | Detailed | Waits for radio acknowledgment from device. Falls back to Instant if unsupported. |
 
-### Methods
-- `__call__(**kwargs)` - Execute the scene
-- `diag()` - Get diagnostic information
+#### Action parameters by actionType
 
-### Scene Actions
-```python
-# Execute scene
-await scene()
+| actionType | Name | Parameter key | Range / Values |
+| --- | --- | --- | --- |
+| 0 | Percentage | `percentage` | 0–100 |
+| 1 | PercentageDelta | `percentageDelta` | -100–100 |
+| 2 | Rotation | `rotation` | -360–360 (device reports -127–127) |
+| 3 | RotationDelta | `rotationDelta` | -720–720 |
+| 4 | Switch | `onOffState` | `true` / `false` |
+| 5 | Toggle | *(none)* | — |
+| 6 | Stop | *(none)* | — |
+| 7 | Impulse | `impulse` | `0` = Up, `1` = Down |
+| 8 | Identify | *(none)* | — |
+| 9 | Enumeration | `enumeration` | 0–16 (see table below) |
 
-# Relearn scene (save current positions)
-await scene(sceneActionType=WMS_WebControl_pro_API_sceneActionType.Relearn)
+#### Enumeration values (potential-free actor devices)
+
+| Value | Action |
+| --- | --- |
+| 0 | No action |
+| 1 | Short run up |
+| 2 | Short run down |
+| 3 | Long run up |
+| 4 | Long run down |
+| 5 | Continuous up |
+| 6 | Continuous down |
+| 7 | Toggle run up |
+| 8 | Toggle run down |
+| 9 | Up and down off |
+| 10 | Toggle up and down simultaneously |
+| 11 | Continuous up and down simultaneously |
+| 12 | Up off |
+| 13 | Down off |
+| 14 | Short run in reverse |
+| 15 | Toggle up |
+| 16 | Toggle down |
+
+---
+
+### sceneActions
+
+Execute or relearn a configured scene.
+
+**Request:**
+
+```json
+{
+  "protocolVersion": "1.0",
+  "command": "sceneActions",
+  "source": 2,
+  "responseType": 0,
+  "sceneId": 688966,
+  "sceneActionType": 1
+}
 ```
 
-## Room Class
+| sceneActionType | Meaning |
+| --- | --- |
+| 0 | Relearn (save current positions into scene) |
+| 1 | Execute scene |
 
-### Properties
-- `id` - Room identifier
-- `name` - Room name
-- `destinations` - Dictionary of devices in this room
-- `scenes` - Dictionary of scenes in this room
+---
 
-## Driving Causes
+## Device: Lamaxa wenden (id 57789)
 
-Shows what triggered the last device movement:
+- **Type**: animationType 3 — SlatRoof
+- **Room**: Terrasse (id 26759)
 
-```python
-class WMS_WebControl_pro_API_drivingCause(IntEnum):
-    _None = 0           # No driving cause
-    Sun = 1             # Sun sensor
-    DuskDawn = 2        # Time-based automation
-    Wind = 3            # Wind sensor
-    Rain = 4            # Rain sensor
-    Ice = 5             # Ice sensor
-    Temperature = 6     # Temperature sensor
-    SwitchingTime = 7   # Scheduled time
-    Scene = 8           # Scene execution
-    ControlMode = 9     # Control mode change
-    Manual = 10         # Manual operation
-    Safety = 11         # Safety override
-    Contact = 12        # Contact sensor
-    CentralCommand = 13 # Central command
-    Unknown = 999
-```
+### Actions
 
-## Common Device Control Patterns
+| ID | actionType | actionDescription | Parameters | Notes |
+| --- | --- | --- | --- | --- |
+| 6 | 2 (Rotation) | 3 (SlatRotate) | `{"rotation": N}` | N in -127…127; physical range ~-40…90 |
+| 16 | 6 (Stop) | 12 (ManualCommand) | `{}` | Halts movement immediately |
+| 22 | 8 (Identify) | 13 (Identify) | `{}` | Device identification (jog) |
+| 23 | 7 (Impulse) | 12 (ManualCommand) | `{"impulse": 0\|1}` | 0 = open direction, 1 = close direction |
 
-### Blinds/Shutters
-```python
-# Move to 50% open
-await device.action(WMS_WebControl_pro_API_actionDescription.SlatDrive)(percentage=50)
+### Raw value calibration
 
-# Rotate slats to 45 degrees
-await device.action(WMS_WebControl_pro_API_actionDescription.SlatRotate)(rotation=45)
+The `rotation` parameter is a dimensionless integer, not degrees. Empirical measurements on this device:
 
-# Stop movement
-await device.action(WMS_WebControl_pro_API_actionDescription.ManualCommand,
-                   WMS_WebControl_pro_API_actionType.Stop)()
-```
+| Commanded | Reported | Notes |
+| --- | --- | --- |
+| -45 | -40 | Physical minimum (fully closed) |
+| 0 | 0 | |
+| 22 | 22 | ~50% open |
+| 90 | ~90 | Physical maximum (fully open) |
 
-### Lights
-```python
-# Turn light on
-await device.action(WMS_WebControl_pro_API_actionDescription.LightSwitch)(switchValue=True)
+Tolerance is approximately ±5 raw units. Adjust `SLAT_MIN_RAW` / `SLAT_MAX_RAW` in `.env` to match your physical endpoints.
 
-# Dim to 75%
-await device.action(WMS_WebControl_pro_API_actionDescription.LightDimming)(percentage=75)
+---
 
-# Toggle light
-await device.action(WMS_WebControl_pro_API_actionDescription.LightToggle)()
-```
+## Type Reference
 
-### Awnings
-```python
-# Extend awning to 80%
-await device.action(WMS_WebControl_pro_API_actionDescription.AwningDrive)(percentage=80)
+### AnimationType
 
-# Retract completely
-await device.action(WMS_WebControl_pro_API_actionDescription.AwningDrive)(percentage=0)
-```
+| ID | Name |
+| --- | --- |
+| 0 | VenetianBlind |
+| 1 | Awning |
+| 2 | RollerShutterBlind |
+| 3 | SlatRoof |
+| 4 | Window |
+| 5 | Switch |
+| 6 | Dimmer |
+| 999 | Unknown |
 
-## Error Handling
+### ActionType
 
-Devices can report errors through:
-- `heartbeatError` - Communication issues
-- `blocking` - Physical obstructions
-- `available` property combines both
+| ID | Name |
+| --- | --- |
+| 0 | Percentage |
+| 1 | PercentageDelta |
+| 2 | Rotation |
+| 3 | RotationDelta |
+| 4 | Switch |
+| 5 | Toggle |
+| 6 | Stop |
+| 7 | Impulse |
+| 8 | Identify |
+| 9 | Enumeration |
+| 999 | Unknown |
 
-## API Limits and Considerations
+### ActionDescription
 
-1. **Rate Limiting**: Avoid rapid successive commands
-2. **Response Types**: Use `Detailed` for confirmation, `Instant` for speed
-3. **Device Refresh**: Call `refresh()` to get current status
-4. **Session Management**: Use proper async context managers
-5. **Error Handling**: Always check device availability before commands
+| ID | Name |
+| --- | --- |
+| 0 | AwningDrive |
+| 1 | ValanceDrive |
+| 2 | SlatDrive |
+| 3 | SlatRotate |
+| 4 | RollerShutterBlindDrive |
+| 5 | WindowDrive |
+| 6 | LightSwitch |
+| 7 | LoadSwitch |
+| 8 | LightDimming |
+| 9 | LoadDimming |
+| 10 | LightToggle |
+| 11 | LastToggle |
+| 12 | ManualCommand |
+| 13 | Identify |
+| 999 | Unknown |
 
-## Complete Example
+---
 
-```python
-import asyncio
-from aiohttp import ClientSession
-from wmspro.webcontrol import WebControlPro
-from wmspro.const import (
-    WMS_WebControl_pro_API_actionDescription,
-    WMS_WebControl_pro_API_responseType
-)
+## Error Codes
 
-async def control_warema_device():
-    async with ClientSession() as session:
-        control = WebControlPro("10.10.1.229", session)
+| Code | Hex | Observed when |
+| --- | --- | --- |
+| 327681 | 0x50001 | Unknown |
+| 327682 | 0x50002 | Impulse action sent without required `impulse` parameter |
+| 327683 | 0x50003 | getStatus missing required field (e.g. no `destinations`) |
+| 327684 | 0x50004 | getStatus: destination unreachable, radio status stale, or `responseType` omitted |
+| 393218 | 0x60002 | sceneActions: invalid or non-existent scene ID |
 
-        # Connect and load configuration
-        if not await control.ping():
-            print("Connection failed")
-            return
+---
 
-        await control.refresh()
+## Rain Sensor Integration
 
-        # Find and control a device
-        device = control.dest("Lamaxa wenden")
-        await device.refresh()
+The WMS rain sensor does **not** appear as a separate destination in `getConfiguration`. Rain automation is handled internally by the WebControl Pro (configured via WMS studio pro) and is visible only through `drivingCause` in `getStatus`:
 
-        # Rotate slats to 90 degrees
-        if device.hasAction(WMS_WebControl_pro_API_actionDescription.SlatRotate):
-            action = device.action(WMS_WebControl_pro_API_actionDescription.SlatRotate)
-            await action(rotation=90, responseType=WMS_WebControl_pro_API_responseType.Detailed)
+- `drivingCause: 4` → rain sensor triggered the last close
+- `drivingCause: 3` → wind sensor triggered
+- `drivingCause: 5` → ice/freeze protection active
+- `drivingCause: 11` → safety override
 
-        # Get updated status
-        await device.refresh()
-        print(f"Device status: {device.status}")
+Poll `getStatus` before sending manual position commands. If `drivingCause` is 3, 4, 5, or 11, weather protection is active and commands should be suppressed (or `--force` used explicitly).
 
-asyncio.run(control_warema_device())
-```
+---
+
+## References
+
+- [Official API Documentation (PDF)](https://media.warema.com/dokumente/anleitungen-handbuecher/966664/warema_2064534_alhb_de_v0.pdf)
+- [pywmspro source](https://github.com/mback2k/pywmspro/tree/master/wmspro)
+- [pywmspro simulator](https://github.com/mback2k/pywmspro/blob/master/simulator/simulator.py) — shows expected JSON shapes for all commands
