@@ -3,6 +3,7 @@
 # WAREMA Slat Control Shell Script
 # Controls slat rotation via direct API calls to WMS WebControl Pro
 # Usage: ./warema_slat.sh <percentage|raw|get|status|stop|impulse|devices> [options]
+# Requires: curl, bc, grep, sed (standard Unix tools only)
 
 set -euo pipefail
 
@@ -169,21 +170,13 @@ get_live_rotation() {
         echo ""
         return
     fi
-    echo "$status_json" | python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-try:
-    pd=d['details'][0]['data']['productData']
-    for item in pd:
-        if item['actionId']==$ACTION_ID:
-            print(item['value']['rotation'])
-            break
-except (KeyError,IndexError):
-    pass
-" 2>/dev/null
+    # Extract rotation for our specific actionId from compact JSON
+    echo "$status_json" | tr -d '\n' | \
+        grep -o "\"actionId\":${ACTION_ID},\"value\":{\"rotation\":[^}]*}" | \
+        sed 's/.*"rotation"://' | tr -d '}' | head -1
 }
 
-# Returns (rotation, drivingCause, heartbeatError, blocking) from status, all or nothing.
+# Returns (rotation, drivingCause, heartbeatError, blocking) from status, one per line.
 get_full_status() {
     local status_json
     status_json=$(fetch_device_status)
@@ -191,26 +184,31 @@ get_full_status() {
         echo ""
         return
     fi
-    echo "$status_json" | python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-try:
-    data=d['details'][0]['data']
-    pd=data['productData']
-    rotation=None
-    for item in pd:
-        if item['actionId']==$ACTION_ID:
-            rotation=item['value']['rotation']
-            break
-    if rotation is None:
-        sys.exit(1)
-    print(rotation)
-    print(data.get('drivingCause',999))
-    print(str(data.get('heartbeatError',False)).lower())
-    print(str(data.get('blocking',False)).lower())
-except (KeyError,IndexError):
-    sys.exit(1)
-" 2>/dev/null
+    local flat
+    flat=$(echo "$status_json" | tr -d '\n')
+
+    local rotation
+    rotation=$(echo "$flat" | \
+        grep -o "\"actionId\":${ACTION_ID},\"value\":{\"rotation\":[^}]*}" | \
+        sed 's/.*"rotation"://' | tr -d '}' | head -1)
+
+    local driving_cause
+    driving_cause=$(echo "$flat" | \
+        grep -o '"drivingCause":[0-9]*' | head -1 | sed 's/"drivingCause"://')
+
+    local heartbeat_err
+    heartbeat_err=$(echo "$flat" | \
+        grep -o '"heartbeatError":[^,}]*' | head -1 | sed 's/"heartbeatError"://')
+
+    local blocking_val
+    blocking_val=$(echo "$flat" | \
+        grep -o '"blocking":[^,}]*' | head -1 | sed 's/"blocking"://')
+
+    if [[ -z "$rotation" || -z "$driving_cause" ]]; then
+        echo ""
+        return
+    fi
+    printf '%s\n%s\n%s\n%s\n' "$rotation" "$driving_cause" "$heartbeat_err" "$blocking_val"
 }
 
 save_state() {
@@ -442,7 +440,11 @@ get_all_devices() {
     fi
     echo "WAREMA Device Configuration (host: $WAREMA_HOST)"
     echo ""
-    echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+    if command -v jq >/dev/null 2>&1; then
+        echo "$response" | jq .
+    else
+        echo "$response"
+    fi
 }
 
 main() {
@@ -513,7 +515,6 @@ main() {
 
     if ! command -v curl >/dev/null 2>&1; then log_error "curl is required"; exit 1; fi
     if ! command -v bc >/dev/null 2>&1; then log_error "bc is required"; exit 1; fi
-    if ! command -v python3 >/dev/null 2>&1; then log_error "python3 is required"; exit 1; fi
 
     case "$action" in
         get)
